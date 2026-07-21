@@ -22,6 +22,7 @@ export interface PresignedUpload {
 export interface IStorageService {
   createUploadUrl(key: string, mimeType: string): Promise<PresignedUpload>;
   createDownloadUrl(key: string): Promise<string>;
+  getObjectBytes(key: string): Promise<Buffer>;
   deleteObject(key: string): Promise<void>;
 }
 
@@ -41,16 +42,27 @@ export class S3StorageService implements IStorageService {
   }
 
   async createUploadUrl(key: string, mimeType: string): Promise<PresignedUpload> {
+    // Note: no ServerSideEncryption header — it would be part of the signature
+    // but the browser PUT doesn't send it, causing a signature mismatch.
+    // Supabase Storage encrypts at rest regardless.
     const command = new PutObjectCommand({
       Bucket: config.storage.bucket,
       Key: key,
       ContentType: mimeType,
-      ServerSideEncryption: 'AES256',
     });
     const uploadUrl = await getSignedUrl(this.client, command, {
       expiresIn: config.storage.uploadUrlTtl,
     });
     return { uploadUrl, storageKey: key, expiresIn: config.storage.uploadUrlTtl };
+  }
+
+  async getObjectBytes(key: string): Promise<Buffer> {
+    const res = await this.client.send(
+      new GetObjectCommand({ Bucket: config.storage.bucket, Key: key }),
+    );
+    if (!res.Body) throw new Error(`Object not found: ${key}`);
+    const bytes = await res.Body.transformToByteArray();
+    return Buffer.from(bytes);
   }
 
   async createDownloadUrl(key: string): Promise<string> {

@@ -1,9 +1,11 @@
 import { randomUUID } from 'crypto';
 import path from 'path';
 import { FileStatus, StationStatus, UploadedFile } from '@prisma/client';
+import { PDFDocument } from 'pdf-lib';
 import { config } from '../../../config';
 import { IStorageService, storageService } from '../../../infrastructure/storage/StorageService';
 import { logger } from '../../../shared/logger/logger';
+import { UpdateProcessingInput } from '../domain/IUploadRepository';
 import {
   BadRequestError,
   ConflictError,
@@ -94,9 +96,52 @@ export class UploadService {
     if (file.status !== FileStatus.uploading) {
       throw new ConflictError(`File cannot be completed from status ${file.status}`);
     }
-    const updated = await this.uploads.updateStatus(fileId, FileStatus.scanning);
-    logger.info('Upload completed, queued for processing', { fileId });
-    return this.toStatus(updated);
+
+    await this.uploads.updateStatus(fileId, FileStatus.scanning);
+    logger.info('Upload completed, processing', { fileId, mimeType: file.mimeType });
+
+    // Process inline: read the stored object, detect page count, mark ready.
+    // (For higher volume this moves to a dedicated worker; the logic is here.)
+    try {
+      const result = await this.process(file);
+      const updated = await this.uploads.updateProcessing(fileId, result);
+      logger.info('File processed', { fileId, status: result.status, pageCount: result.pageCount });
+      return this.toStatus(updated);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Processing failed';
+      logger.error('File processing failed', { fileId, message });
+      const updated = await this.uploads.updateProcessing(fileId, {
+        status: FileStatus.rejected,
+        rejectReason: message,
+      });
+      return this.toStatus(updated);
+    }
+  }
+
+  /**
+   * Detects the page count of the uploaded document. PDFs are parsed for their
+   * real page count; images count as a single page. Office formats need
+   * conversion (not enabled in this deployment yet) and are rejected clearly.
+   */
+  private async process(file: UploadedFile): Promise<UpdateProcessingInput> {
+    if (file.mimeType === 'application/pdf') {
+      const bytes = await this.storage.getObjectBytes(file.storageKey);
+      const doc = await PDFDocument.load(bytes, { updateMetadata: false });
+      const pageCount = doc.getPageCount();
+      if (pageCount < 1) {
+        return { status: FileStatus.rejected, rejectReason: 'The PDF has no pages.' };
+      }
+      return { status: FileStatus.ready, pageCount, normalizedKey: file.storageKey };
+    }
+
+    if (file.mimeType.startsWith('image/')) {
+      return { status: FileStatus.ready, pageCount: 1, normalizedKey: file.storageKey };
+    }
+
+    return {
+      status: FileStatus.rejected,
+      rejectReason: 'Only PDF and image files are supported right now. Please upload a PDF.',
+    };
   }
 
   async getStatus(fileId: string, stationId: string, sessionId: string): Promise<FileStatusResult> {
