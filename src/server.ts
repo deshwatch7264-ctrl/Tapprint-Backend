@@ -4,6 +4,17 @@ import { config } from './config';
 import { connectDatabase, disconnectDatabase } from './infrastructure/database/prisma';
 import { logger } from './shared/logger/logger';
 
+// Loud, synchronous boot marker so we can always confirm this build is running.
+// eslint-disable-next-line no-console
+console.log(`BOOT: TapPrint server.js starting (PORT env=${process.env.PORT ?? 'unset'})`);
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)),
+  ]);
+}
+
 /**
  * Starts the HTTP server immediately. The health check (`/v1/health`) does not
  * depend on the database, so binding first means the platform health check
@@ -34,7 +45,10 @@ function startServer(): http.Server {
 async function connectWithRetry(retries = 5, delayMs = 3000): Promise<void> {
   for (let attempt = 1; attempt <= retries; attempt += 1) {
     try {
-      await connectDatabase();
+      // Hard timeout so a stuck connection surfaces an error instead of hanging.
+      await withTimeout(connectDatabase(), 10_000, 'Database connect');
+      // eslint-disable-next-line no-console
+      console.log('BOOT: database connected');
       return;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
