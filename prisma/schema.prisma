@@ -130,10 +130,29 @@ model Station {
   pricingRules PricingRule[]
   files        UploadedFile[]
   jobs         PrintJob[]
+  agents       PrintAgent[]
 
   @@index([ownerId])
   @@index([status])
   @@map("stations")
+}
+
+model PrintAgent {
+  id              String    @id @default(uuid())
+  stationId       String    @map("station_id")
+  agentTokenHash  String    @map("agent_token_hash")
+  version         String?
+  hostname        String?
+  lastHeartbeatAt DateTime? @map("last_heartbeat_at")
+  isConnected     Boolean   @default(false) @map("is_connected")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  station Station @relation(fields: [stationId], references: [id], onDelete: Cascade)
+
+  @@index([stationId])
+  @@index([agentTokenHash])
+  @@map("print_agents")
 }
 
 model Printer {
