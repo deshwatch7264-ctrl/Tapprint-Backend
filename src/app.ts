@@ -4,7 +4,6 @@ import express, { Application, Request } from 'express';
 import helmet from 'helmet';
 import { config } from './config';
 import { apiRouter } from './routes';
-import './shared/types/express';
 import { errorHandler, notFoundHandler } from './middleware/error.middleware';
 import { rateLimiters } from './middleware/rateLimit.middleware';
 import { requestContext } from './middleware/requestContext.middleware';
