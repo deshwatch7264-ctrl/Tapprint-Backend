@@ -1,0 +1,331 @@
+// TapPrint — Prisma schema
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum AdminRole {
+  super_admin
+  owner
+  support
+}
+
+enum StationStatus {
+  active
+  paused
+  maintenance
+  disabled
+}
+
+enum PrinterStatus {
+  online
+  offline
+  busy
+  out_of_paper
+  paper_jam
+  low_toner
+  no_toner
+  error
+  agent_disconnected
+}
+
+enum ColorMode {
+  bw
+  color
+}
+
+enum JobStatus {
+  created
+  awaiting_payment
+  queued
+  claimed
+  printing
+  retrying
+  completed
+  failed
+  cancelled
+  refunded
+}
+
+enum FileStatus {
+  uploading
+  uploaded
+  scanning
+  converting
+  ready
+  rejected
+  purged
+}
+
+enum PaymentStatus {
+  pending
+  processing
+  captured
+  failed
+  cancelled
+  refunded
+  partially_refunded
+}
+
+enum RefundStatus {
+  initiated
+  processing
+  succeeded
+  failed
+}
+
+model AdminUser {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  passwordHash String    @map("password_hash")
+  fullName     String    @map("full_name")
+  role         AdminRole @default(owner)
+  phone        String?
+  mfaEnabled   Boolean   @default(false) @map("mfa_enabled")
+  isActive     Boolean   @default(true) @map("is_active")
+  lastLoginAt  DateTime? @map("last_login_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  stations Station[]
+
+  @@map("admin_users")
+}
+
+model User {
+  id          String   @id @default(uuid())
+  phone       String?
+  email       String?
+  displayName String?  @map("display_name")
+  isGuest     Boolean  @default(true) @map("is_guest")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  files UploadedFile[]
+  jobs  PrintJob[]
+
+  @@map("users")
+}
+
+model Station {
+  id        String        @id @default(uuid())
+  ownerId   String        @map("owner_id")
+  name      String
+  slug      String        @unique
+  address   String?
+  timezone  String        @default("UTC")
+  status    StationStatus @default(active)
+  createdAt DateTime      @default(now()) @map("created_at")
+  updatedAt DateTime      @updatedAt @map("updated_at")
+
+  owner        AdminUser      @relation(fields: [ownerId], references: [id])
+  printers     Printer[]
+  pricingRules PricingRule[]
+  files        UploadedFile[]
+  jobs         PrintJob[]
+
+  @@index([ownerId])
+  @@index([status])
+  @@map("stations")
+}
+
+model Printer {
+  id             String        @id @default(uuid())
+  stationId      String        @map("station_id")
+  name           String
+  model          String?
+  systemName     String?       @map("system_name")
+  supportsColor  Boolean       @default(false) @map("supports_color")
+  supportsDuplex Boolean       @default(false) @map("supports_duplex")
+  paperSizes     String[]      @default(["A4"]) @map("paper_sizes")
+  currentStatus  PrinterStatus @default(offline) @map("current_status")
+  isDefault      Boolean       @default(false) @map("is_default")
+  createdAt      DateTime      @default(now()) @map("created_at")
+  updatedAt      DateTime      @updatedAt @map("updated_at")
+
+  station Station    @relation(fields: [stationId], references: [id], onDelete: Cascade)
+  jobs    PrintJob[]
+
+  @@index([stationId])
+  @@index([currentStatus])
+  @@map("printers")
+}
+
+model PricingRule {
+  id              String   @id @default(uuid())
+  stationId       String   @map("station_id")
+  version         Int
+  bwPagePrice     Int      @map("bw_page_price")
+  colorPagePrice  Int      @map("color_page_price")
+  duplexDiscount  Float    @default(0) @map("duplex_discount")
+  minimumCharge   Int      @default(0) @map("minimum_charge")
+  paperMultiplier Json     @default("{\"A4\":1}") @map("paper_multiplier")
+  currency        String   @default("INR")
+  isActive        Boolean  @default(true) @map("is_active")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  station Station    @relation(fields: [stationId], references: [id], onDelete: Cascade)
+  jobs    PrintJob[]
+
+  @@unique([stationId, version])
+  @@index([stationId])
+  @@map("pricing_rules")
+}
+
+model UploadedFile {
+  id               String     @id @default(uuid())
+  userId           String?    @map("user_id")
+  sessionId        String?    @map("session_id")
+  stationId        String     @map("station_id")
+  originalFilename String     @map("original_filename")
+  mimeType         String     @map("mime_type")
+  sizeBytes        BigInt     @map("size_bytes")
+  storageKey       String     @unique @map("storage_key")
+  normalizedKey    String?    @map("normalized_key")
+  pageCount        Int?       @map("page_count")
+  checksumSha256   String?    @map("checksum_sha256")
+  status           FileStatus @default(uploading)
+  rejectReason     String?    @map("reject_reason")
+  expiresAt        DateTime?  @map("expires_at")
+  purgedAt         DateTime?  @map("purged_at")
+  createdAt        DateTime   @default(now()) @map("created_at")
+  updatedAt        DateTime   @updatedAt @map("updated_at")
+
+  user    User?      @relation(fields: [userId], references: [id])
+  station Station    @relation(fields: [stationId], references: [id], onDelete: Cascade)
+  jobs    PrintJob[]
+
+  @@index([stationId])
+  @@index([sessionId])
+  @@index([status])
+  @@map("uploaded_files")
+}
+
+model PrintJob {
+  id             String     @id @default(uuid())
+  userId         String?    @map("user_id")
+  sessionId      String?    @map("session_id")
+  stationId      String     @map("station_id")
+  printerId      String?    @map("printer_id")
+  fileId         String     @map("file_id")
+  pricingRuleId  String?    @map("pricing_rule_id")
+  color          ColorMode  @default(bw)
+  copies         Int        @default(1)
+  pageRange      String?    @map("page_range")
+  pagesToPrint   Int        @map("pages_to_print")
+  paperSize      String     @default("A4") @map("paper_size")
+  duplex         Boolean    @default(false)
+  orientation    String     @default("portrait")
+  subtotal       Int        @default(0)
+  discount       Int        @default(0)
+  amount         Int
+  currency       String     @default("INR")
+  status         JobStatus  @default(created)
+  leaseOwner     String?    @map("lease_owner")
+  leaseExpiresAt DateTime?  @map("lease_expires_at")
+  retryCount     Int        @default(0) @map("retry_count")
+  idempotencyKey String?    @unique @map("idempotency_key")
+  failureReason  String?    @map("failure_reason")
+  queuedAt       DateTime?  @map("queued_at")
+  printedAt      DateTime?  @map("printed_at")
+  completedAt    DateTime?  @map("completed_at")
+  createdAt      DateTime   @default(now()) @map("created_at")
+  updatedAt      DateTime   @updatedAt @map("updated_at")
+
+  user        User?        @relation(fields: [userId], references: [id])
+  station     Station      @relation(fields: [stationId], references: [id])
+  printer     Printer?     @relation(fields: [printerId], references: [id])
+  file        UploadedFile @relation(fields: [fileId], references: [id])
+  pricingRule PricingRule? @relation(fields: [pricingRuleId], references: [id])
+  payments    Payment[]
+  events      JobEvent[]
+  refunds     Refund[]
+
+  @@index([stationId])
+  @@index([sessionId])
+  @@index([printerId])
+  @@index([status])
+  @@map("print_jobs")
+}
+
+model JobEvent {
+  id         BigInt     @id @default(autoincrement())
+  jobId      String     @map("job_id")
+  fromStatus JobStatus? @map("from_status")
+  toStatus   JobStatus  @map("to_status")
+  detail     String?
+  actor      String?
+  createdAt  DateTime   @default(now()) @map("created_at")
+
+  job PrintJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId])
+  @@map("job_events")
+}
+
+model Payment {
+  id               String        @id @default(uuid())
+  jobId            String        @map("job_id")
+  userId           String?       @map("user_id")
+  gateway          String        @default("razorpay")
+  gatewayOrderId   String?       @unique @map("gateway_order_id")
+  gatewayPaymentId String?       @unique @map("gateway_payment_id")
+  amount           Int
+  currency         String        @default("INR")
+  method           String?
+  status           PaymentStatus @default(pending)
+  webhookVerified  Boolean       @default(false) @map("webhook_verified")
+  failureReason    String?       @map("failure_reason")
+  capturedAt       DateTime?     @map("captured_at")
+  createdAt        DateTime      @default(now()) @map("created_at")
+  updatedAt        DateTime      @updatedAt @map("updated_at")
+
+  job     PrintJob @relation(fields: [jobId], references: [id])
+  refunds Refund[]
+
+  @@index([jobId])
+  @@index([status])
+  @@map("payments")
+}
+
+model Refund {
+  id              String       @id @default(uuid())
+  paymentId       String       @map("payment_id")
+  jobId           String       @map("job_id")
+  amount          Int
+  reason          String?
+  gatewayRefundId String?      @unique @map("gateway_refund_id")
+  status          RefundStatus @default(initiated)
+  initiatedBy     String?      @map("initiated_by") // admin id, or null for auto
+  createdAt       DateTime     @default(now()) @map("created_at")
+  updatedAt       DateTime     @updatedAt @map("updated_at")
+
+  payment Payment  @relation(fields: [paymentId], references: [id])
+  job     PrintJob @relation(fields: [jobId], references: [id])
+
+  @@index([paymentId])
+  @@index([jobId])
+  @@index([status])
+  @@map("refunds")
+}
+
+// Stores every processed Razorpay webhook event id. The unique constraint on
+// eventId is the core of replay-attack prevention: a duplicate/replayed
+// delivery collides on insert and is treated as an idempotent no-op.
+model WebhookEvent {
+  id          String   @id @default(uuid())
+  eventId     String   @unique @map("event_id")
+  eventType   String   @map("event_type")
+  gateway     String   @default("razorpay")
+  signature   String?
+  payloadHash String?  @map("payload_hash")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([eventType])
+  @@map("webhook_events")
+}
