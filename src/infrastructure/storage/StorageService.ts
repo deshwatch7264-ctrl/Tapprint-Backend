@@ -23,6 +23,7 @@ export interface IStorageService {
   createUploadUrl(key: string, mimeType: string): Promise<PresignedUpload>;
   createDownloadUrl(key: string): Promise<string>;
   getObjectBytes(key: string): Promise<Buffer>;
+  putObject(key: string, body: Buffer, contentType: string): Promise<void>;
   deleteObject(key: string): Promise<void>;
 }
 
@@ -63,6 +64,17 @@ export class S3StorageService implements IStorageService {
     if (!res.Body) throw new Error(`Object not found: ${key}`);
     const bytes = await res.Body.transformToByteArray();
     return Buffer.from(bytes);
+  }
+
+  async putObject(key: string, body: Buffer, contentType: string): Promise<void> {
+    await this.client.send(
+      new PutObjectCommand({
+        Bucket: config.storage.bucket,
+        Key: key,
+        Body: body,
+        ContentType: contentType,
+      }),
+    );
   }
 
   async createDownloadUrl(key: string): Promise<string> {

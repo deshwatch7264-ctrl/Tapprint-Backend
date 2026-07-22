@@ -135,7 +135,31 @@ export class UploadService {
     }
 
     if (file.mimeType.startsWith('image/')) {
-      return { status: FileStatus.ready, pageCount: 1, normalizedKey: file.storageKey };
+      // Convert the image into a proper A4 PDF so the print agent (which prints
+      // PDFs) produces a real page instead of a blank/garbage one.
+      const bytes = await this.storage.getObjectBytes(file.storageKey);
+      const pdf = await PDFDocument.create();
+      const image =
+        file.mimeType === 'image/png' ? await pdf.embedPng(bytes) : await pdf.embedJpg(bytes);
+
+      const pageW = 595.28; // A4 width in points
+      const pageH = 841.89; // A4 height in points
+      const margin = 24;
+      const page = pdf.addPage([pageW, pageH]);
+      const scale = Math.min(
+        (pageW - margin * 2) / image.width,
+        (pageH - margin * 2) / image.height,
+        1,
+      );
+      const w = image.width * scale;
+      const h = image.height * scale;
+      page.drawImage(image, { x: (pageW - w) / 2, y: (pageH - h) / 2, width: w, height: h });
+
+      const pdfBytes = Buffer.from(await pdf.save());
+      const normalizedKey = `${file.storageKey}.pdf`;
+      await this.storage.putObject(normalizedKey, pdfBytes, 'application/pdf');
+
+      return { status: FileStatus.ready, pageCount: 1, normalizedKey };
     }
 
     return {
